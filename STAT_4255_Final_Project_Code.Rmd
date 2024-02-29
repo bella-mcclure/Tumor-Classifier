@@ -1,0 +1,560 @@
+```{r}
+
+#Part A
+#Importing the Data Set
+library(psych)
+loc <- "http://archive.ics.uci.edu/ml/machine-learning-databases/"
+ds <- "breast-cancer-wisconsin/breast-cancer-wisconsin.data"
+url <- paste(loc, ds, sep="")
+breast <- read.table(url, sep=",", header=FALSE, na.strings="?")
+names(breast) <- c("ID", "clumpThickness", "sizeUniformity",
+                   "shapeUniformity", "marginalAdhesion",
+                   "singleEpithelialCellSize", "bareNuclei",
+                   "blandChromatin", "normalNucleoli", "mitosis",
+                   "class")
+df <- breast[-1]
+df$class <- factor(df$class, levels=c(2,4),
+                   labels=c("benign", "malignant"))
+rm(breast)
+head(df, 10)
+
+#Part B
+#Descriptive Statistical Analysis
+describe(df)
+names(df)
+
+#Part C
+#Data Cleaning
+#1. Replace missing values.
+print(sum(is.na(df)))#Some missing values presented.
+head(df$bareNuclei)
+shapiro.test(df$bareNuclei)#Check normal distribution.
+#The column is normally distributed, so we used the mean value
+#to replace all the null values.
+library(sqldf)
+df_missing_value_replaced <- sqldf(
+  "SELECT clumpThickness, sizeUniformity, shapeUniformity,
+   marginalAdhesion, singleEpithelialCellSize, (
+   CASE
+   WHEN bareNuclei IS NULL THEN (SELECT AVG(bareNuclei) FROM df)
+   ELSE bareNuclei
+   END
+   ) AS bareNuclei,              
+   blandChromatin, normalNucleoli, mitosis, class
+   FROM df"
+)
+print(sum(is.na(df_missing_value_replaced)))
+#2. Covert the class to factors.
+df_missing_value_replaced$class <- as.factor(
+  df_missing_value_replaced$class)
+class(df_missing_value_replaced$class)
+
+#Part D
+#1. Introduction
+#Below we perform a set of classification algorithms using K-fold cross-validation as
+#our verification tool. The algorithms that did not have a built in function for CV
+#were performed manually
+calculate_accuracy <- function(twowaytable){
+  return((twowaytable[1,1]+twowaytable[2,2])/
+           (twowaytable[1,1]+twowaytable[1,2]+twowaytable[2,1]+
+              twowaytable[2,2]))
+}
+#2. Logistic Regression
+library(boot)
+set.seed(1)
+test_accuracy_lgr = (1 - (
+  cv.glm(df_missing_value_replaced, glm(
+    class~.,data=df_missing_value_replaced, family = "binomial"
+  ), K=10)
+)$delta[1])
+test_accuracy_lgr #0.972
+lgr_model <- glm(class~., data = df_missing_value_replaced,
+                 family = "binomial")
+#3. Linear & Quadratic Discriminant Analysis
+set.seed(1)
+k_fold_index <- sample(1:10, nrow(df_missing_value_replaced),
+                       replace = T)
+test_accuracy_lda <- rep(NA, 10)
+library(MASS)
+for(i in 1:10){
+  train = (k_fold_index != i)
+  test = (k_fold_index == i)
+  lda_temp <- lda(class~., data = df_missing_value_replaced[train, ])
+  lda_pred <- predict(lda_temp, df_missing_value_replaced[test, ])
+  table_lda <- table(lda_pred$class,
+                     (df_missing_value_replaced[test, ])$class)
+  test_accuracy_lda[i] = calculate_accuracy(
+    table_lda
+  )
+}
+mean(test_accuracy_lda)#0.960
+lda_model <- lda(class~., data = df_missing_value_replaced)
+#QDA
+test_accuracy_qda <- rep(NA, 10)
+for(i in 1:10){
+  train = (k_fold_index != i)
+  test = (k_fold_index == i)
+  qda_temp <- qda(class~., data = df_missing_value_replaced[train, ])
+  qda_pred <- predict(qda_temp, df_missing_value_replaced[test, ])
+  table_qda <- table(qda_pred$class,
+                     (df_missing_value_replaced[test, ])$class)
+  test_accuracy_qda[i] = calculate_accuracy(
+    table_qda
+  )
+}
+mean(test_accuracy_qda)#0.953
+qda_model <- qda(class~., data = df_missing_value_replaced)
+#4. Bagging & Random Forest
+#Bagging
+library(randomForest)
+test_accuracy_bag<- rep(NA, 10)
+for(i in 1:10){
+  set.seed(1)
+  train = (k_fold_index != i)
+  test = (k_fold_index == i)
+  bag_temp <- randomForest(
+    class~., data = df_missing_value_replaced[train, ],
+    mtry = (dim(df_missing_value_replaced)[2]) - 1)
+  bag_pred <- predict(bag_temp,
+                      newdata = df_missing_value_replaced[test, ])
+  table_bag <- table(bag_pred, df_missing_value_replaced[test, ]$class)
+  test_accuracy_bag[i] = calculate_accuracy(
+    table_bag)
+}
+print(mean(test_accuracy_bag))#0.966532
+#Random Forest
+test_accuracy_rf <- matrix(data = NA, nrow = 10, ncol = 8)
+for(i in 1:10){
+  train = (k_fold_index != i)
+  test = (k_fold_index == i)
+  for(a in 2:(dim(df_missing_value_replaced)[2]) - 1){
+    set.seed(1)
+    rf_temp <- randomForest(
+      class~., data = df_missing_value_replaced[train, ],
+      mtry = a)
+    rf_pred <- predict(rf_temp,
+                       newdata = df_missing_value_replaced[test, ])
+    table_rf <- table(
+      rf_pred, df_missing_value_replaced[test, ]$class)
+    test_accuracy_rf[i,a-1] = calculate_accuracy(table_rf)
+  }
+}
+which.max(apply(test_accuracy_rf, 2, mean)) + 1
+#mtry = 3 has the best performance.
+(apply(test_accuracy_rf, 2, mean))[2]#0.971
+set.seed(1)
+rf_model <- randomForest(
+  class~., data = df_missing_value_replaced, mtry = 3
+)
+#5. KNN
+library(e1071)
+library(class)
+test_accuracy_knn <- matrix(data=NA, nrow=10,ncol=8)
+for(i in 1:10){
+  train = (k_fold_index != i)
+  test = (k_fold_index == i)
+  for(a in 1:8){
+    set.seed(1)
+    knn_pred <- knn(
+      as.matrix(df_missing_value_replaced[train, c(-10)]),
+      as.matrix(df_missing_value_replaced[test, c(-10)]),
+      as.vector(df_missing_value_replaced[train, ]$class),
+      k = a)
+    table_knn <- table(
+      knn_pred, df_missing_value_replaced[test, ]$class)
+    test_accuracy_knn[i,a] = calculate_accuracy(table_knn)
+  }
+}
+(apply(test_accuracy_knn, 2, mean))[which.max(
+  apply(test_accuracy_knn, 2, mean)
+)]#0.9716859
+#k = 7 is the best
+"Code sample:
+knn_pred <- knn(
+      as.matrix(df_missing_value_replaced[, c(-10)]),
+      as.matrix(dfpre),
+      as.vector(df_missing_value_replaced[, ]$class),
+      k = 7)"
+#6. Naive Bayes
+test_accuracy_nb <- rep(NA, 10)
+for(i in 1:10){
+  train = (k_fold_index != i)
+  test = (k_fold_index == i)
+  nb_temp <- naiveBayes(
+    class~., data = df_missing_value_replaced[train, ])
+  nb_pred <- predict(nb_temp, df_missing_value_replaced[test, ])
+  table_nb <- table(nb_pred,
+                    (df_missing_value_replaced[test, ])$class)
+  test_accuracy_nb[i] = calculate_accuracy(
+    table_nb
+  )
+}
+mean(test_accuracy_nb)#0.961623
+nb_model <- naiveBayes(class~., data = df_missing_value_replaced)
+#7. Classification Decision Tree
+library(tree)
+test_accuracy_tree <- rep(NA, 10)
+best_size_tree <- rep(NA, 10)
+for(i in 1:10){
+  set.seed(1)
+  train = (k_fold_index != i)
+  test = (k_fold_index == i)
+  tree = tree(class~., data = df_missing_value_replaced[train, ])
+  tree_temp <- cv.tree(tree, FUN = prune.misclass)
+  best_size = tree_temp$size[which.min(tree_temp$dev)]
+  best_size_tree[i] = best_size
+  tree_pruned = prune.misclass(tree, best_size)
+  tree_pred <- predict(tree_pruned,
+                       df_missing_value_replaced[test, ],
+                       type = "class")
+  table_tree <- table(tree_pred, 
+                      (df_missing_value_replaced[test, ])$class)
+  test_accuracy_tree[i] = calculate_accuracy(
+    table_tree
+  )
+}
+mean(test_accuracy_tree)#0.935
+'Code Sample:
+tree_model <- tree(class~., data = df_missing_value_replaced)
+tr_model <- prune.misclass(tree_model, 6)
+tree_pred <- predict(tr_model, dfpre, type = "class")'
+#8. Support Vector Machine
+#8.1. Linear Kernel
+set.seed(1)
+linear_kernel_svm <- tune(
+  svm, class~., data = df_missing_value_replaced, kernel = "linear",
+  ranges = list(cost = c(
+    0.001,0.01,0.1,1,5,10,100
+  ))
+)
+svm_cve_linear <- summary(linear_kernel_svm)
+1 - svm_cve_linear$best.performance#0.96853
+svm_cve_linear$best.parameters
+#8.2. Polynomial Kernel
+set.seed(1)
+poly_kernel_svm <- tune(
+  svm, class~., data = df_missing_value_replaced, kernel = "polynomial",
+  ranges = list(cost = c(
+    0.001,0.01,0.1,1,5,10,100
+  ), degree = c(1,2,3))
+)
+svm_cve_poly <- summary(poly_kernel_svm)
+1 - svm_cve_poly$best.performance#0.96853
+svm_cve_poly$best.parameters
+#8.3. Radial Kernel
+set.seed(1)
+radial_kernel_svm <- tune(
+  svm, class~., data = df_missing_value_replaced, kernel = "radial",
+  ranges = list(cost = c(
+    0.001,0.01,0.1,1,5,10,100
+  ), gamma = c(1,2,3,4,5))
+)
+svm_cve_radial <- summary(radial_kernel_svm)
+1 - svm_cve_radial$best.performance#0.958
+svm_cve_radial$best.parameters
+svm_model <- svm(class~., data = df_missing_value_replaced,
+                 kernel = "linear", cost = 0.01)
+
+
+#Part E.
+#Below, we use the best model to build an AI to output the prediction.
+#Load useful libraries.
+library(telegram.bot)
+library(httr)
+library(jsonlite)
+
+# Set up bot token
+bot_token <- "6844397752:AAHwibBVeuX-ICJgiBPTHUzxCtVZWBGMZ3s"
+
+# Create the bot
+updater <- Updater(token = bot_token)
+
+#Functions
+#1. Check Raw Data Set
+rawdata <- function(bot, update){
+  bot$sendMessage(chat_id = update$message$chat_id,
+                  text = url)
+}
+#2. Best Model Prediction
+prediction_lgr <- function(bot, update, args){
+  if (length(args) == 9) {
+    args <- as.numeric(args)
+    dfpre <- data.frame(t(args))
+    names(dfpre) <- c(
+      "clumpThickness", "sizeUniformity",
+      "shapeUniformity", "marginalAdhesion",
+      "singleEpithelialCellSize", "bareNuclei",
+      "blandChromatin", "normalNucleoli", "mitosis"
+    )
+    'lgr_model <- glm(class~., data = df_missing_value_replaced,
+                     family = "binomial")'
+    lgr_pred <- predict(lgr_model, dfpre,
+                        type = "response")
+    lgr_label <- ifelse(lgr_pred > 0.5, "malignant", "benign")
+    bot$sendMessage(chat_id = update$message$chat_id, text = lgr_label)
+    cat("lgr has been performed\n")
+  } else {
+    bot$sendMessage(chat_id = update$message$chat_id, 
+                    text =
+                      "Please provide exact 9 arguments for prediction."
+    )
+    cat("Please provide exact 9 arguments for prediction.\n")
+  }
+}
+#Subpar Models
+#LDA
+prediction_lda <- function(bot, update, args){
+  if (length(args) == 9) {
+    args <- as.numeric(args)
+    dfpre <- data.frame(t(args))
+    names(dfpre) <- c(
+      "clumpThickness", "sizeUniformity",
+      "shapeUniformity", "marginalAdhesion",
+      "singleEpithelialCellSize", "bareNuclei",
+      "blandChromatin", "normalNucleoli", "mitosis"
+    )
+    lda_pred <- predict(lda_model, dfpre)
+    bot$sendMessage(chat_id = update$message$chat_id,
+                    text = as.character(lda_pred$class))
+    cat("lda has been performed\n")
+  } else {
+    bot$sendMessage(chat_id = update$message$chat_id, 
+                    text = 
+                      "Please provide exact 9 arguments for prediction."
+    )
+    cat("Please provide exact 9 arguments for prediction.\n")
+  }
+}
+#QDA
+prediction_qda <- function(bot, update, args){
+  if (length(args) == 9) {
+    args <- as.numeric(args)
+    dfpre <- data.frame(t(args))
+    names(dfpre) <- c(
+      "clumpThickness", "sizeUniformity",
+      "shapeUniformity", "marginalAdhesion",
+      "singleEpithelialCellSize", "bareNuclei",
+      "blandChromatin", "normalNucleoli", "mitosis"
+    )
+    qda_pred <- predict(qda_model, dfpre)
+    bot$sendMessage(chat_id = update$message$chat_id,
+                    text = as.character(qda_pred$class))
+    cat("qda has been performed\n")
+  } else {
+    bot$sendMessage(chat_id = update$message$chat_id, 
+                    text = 
+                      "Please provide exact 9 arguments for prediction."
+    )
+    cat("Please provide exact 9 arguments for prediction.\n")
+  }
+}
+#KNN
+set.seed(1)
+prediction_knn <- function(bot, update, args){
+  if (length(args) == 9) {
+    args <- as.numeric(args)
+    dfpre <- data.frame(t(args))
+    names(dfpre) <- c(
+      "clumpThickness", "sizeUniformity",
+      "shapeUniformity", "marginalAdhesion",
+      "singleEpithelialCellSize", "bareNuclei",
+      "blandChromatin", "normalNucleoli", "mitosis"
+    )
+    set.seed(1)
+    knn_pred <- knn(
+      as.matrix(df_missing_value_replaced[, c(-10)]),
+      as.matrix(dfpre),
+      as.vector(df_missing_value_replaced[, ]$class),
+      k = 7)
+    bot$sendMessage(chat_id = update$message$chat_id,
+                    text = as.character(qda_pred$class))
+    cat("knn has been performed\n")
+  } else {
+    bot$sendMessage(chat_id = update$message$chat_id, 
+                    text = 
+                      "Please provide exact 9 arguments for prediction."
+    )
+    cat("Please provide exact 9 arguments for prediction.\n")
+  }
+}
+#Naive Bayes
+set.seed(1)
+prediction_nb <- function(bot, update, args){
+  if (length(args) == 9) {
+    args <- as.numeric(args)
+    dfpre <- data.frame(t(args))
+    names(dfpre) <- c(
+      "clumpThickness", "sizeUniformity",
+      "shapeUniformity", "marginalAdhesion",
+      "singleEpithelialCellSize", "bareNuclei",
+      "blandChromatin", "normalNucleoli", "mitosis"
+    )
+    nb_pred <- predict(nb_model, dfpre)
+    bot$sendMessage(chat_id = update$message$chat_id,
+                    text = as.character(nb_pred))
+    cat("nb has been performed\n")
+  } else {
+    bot$sendMessage(chat_id = update$message$chat_id, 
+                    text = 
+                      "Please provide exact 9 arguments for prediction."
+    )
+    cat("Please provide exact 9 arguments for prediction.\n")
+  }
+}
+#Decision Tree
+set.seed(1)
+prediction_tree <- function(bot, update, args){
+  if (length(args) == 9) {
+    args <- as.numeric(args)
+    dfpre <- data.frame(t(args))
+    names(dfpre) <- c(
+      "clumpThickness", "sizeUniformity",
+      "shapeUniformity", "marginalAdhesion",
+      "singleEpithelialCellSize", "bareNuclei",
+      "blandChromatin", "normalNucleoli", "mitosis"
+    )
+    tree_model <- tree(class~., data = df_missing_value_replaced)
+    tr_model <- prune.misclass(tree_model, 6)
+    tree_pred <- predict(tr_model, dfpre, type = "class")
+    bot$sendMessage(chat_id = update$message$chat_id,
+                    text = as.character(tree_pred))
+    cat("tree has been performed\n")
+  } else {
+    bot$sendMessage(chat_id = update$message$chat_id, 
+                    text = 
+                      "Please provide exact 9 arguments for prediction."
+    )
+    cat("Please provide exact 9 arguments for prediction.\n")
+  }
+}
+#SVM
+set.seed(1)
+prediction_svm <- function(bot, update, args){
+  if (length(args) == 9) {
+    args <- as.numeric(args)
+    dfpre <- data.frame(t(args))
+    names(dfpre) <- c(
+      "clumpThickness", "sizeUniformity",
+      "shapeUniformity", "marginalAdhesion",
+      "singleEpithelialCellSize", "bareNuclei",
+      "blandChromatin", "normalNucleoli", "mitosis"
+    )
+    svm_pred <- predict(svm_model, dfpre)
+    bot$sendMessage(chat_id = update$message$chat_id,
+                    text = as.character(svm_pred))
+    cat("svm has been performed\n")
+  } else {
+    bot$sendMessage(chat_id = update$message$chat_id, 
+                    text = 
+                      "Please provide exact 9 arguments for prediction."
+    )
+    cat("Please provide exact 9 arguments for prediction.\n")
+  }
+}
+#Random Forest
+set.seed(1)
+prediction_rf <- function(bot, update, args){
+  if (length(args) == 9) {
+    args <- as.numeric(args)
+    dfpre <- data.frame(t(args))
+    names(dfpre) <- c(
+      "clumpThickness", "sizeUniformity",
+      "shapeUniformity", "marginalAdhesion",
+      "singleEpithelialCellSize", "bareNuclei",
+      "blandChromatin", "normalNucleoli", "mitosis"
+    )
+    rf_pred <- predict(rf_model, dfpre)
+    bot$sendMessage(chat_id = update$message$chat_id,
+                    text = as.character(rf_pred))
+    cat("rf has been performed")
+  } else {
+    bot$sendMessage(chat_id = update$message$chat_id, 
+                    text = 
+                      "Please provide exact 9 arguments for prediction."
+    )
+    cat("Please provide exact 9 arguments for prediction.\n")
+  }
+}
+#Handle Unknown, Load Description
+unknown <- function(bot, update){
+  bot$sendMessage(chat_id = update$message$chat_id,
+                  text = "
+Here is a description of the bot: 
+This bot is used to predict one's breast cancer tumor (is benign or malignant).
+Enter your data in a specific way to get the prediction.
+For example: 
+/lgr 1 1 1 1 1 1 1 1 1.
+The order of the input should be: in the orders of these parameters:
+ clumpThickness;
+ sizeUniformity;
+ shapeUniformity;
+ marginalAdhesion;
+ singleEpithelialCellSize;
+ bareNuclei;
+ blandChromatin, 
+ normalNucleoli,
+ mitosis
+In the example: 
+/lgr 1 2 3 4 5 6 7 8 9,
+ clumpThickness: 1
+ sizeUniformity: 2
+ shapeUniformity: 3
+ marginalAdhesion: 4
+ singleEpithelialCellSize: 5
+ bareNuclei: 6
+ blandChromatin: 7 
+ normalNucleoli： 8
+ mitosis 9
+The applied model here is logistic regression.
+We not only provide logistic regression.
+A list of all the models we support are:
+/lgr Logistic Regression
+/lda Linear Discriminant Analysis
+/qda Quadratic Discriminant Analysis
+/knn K Nearest Neighbor
+/svm Support Vector Machine
+/tree Decision Pruned Tree
+/nb Naive Bayes
+/rf Random Forest
+Enter your data in the way like the example to get your prediction.
+Remark: This robot is written by Xiao Yuheng and Isabella McClure."
+  )
+  cat("Description has been shown\n")
+}
+
+# Add these command to the bot
+updater <- updater + CommandHandler("rawdata", rawdata)
+updater <- updater + CommandHandler("lgr", prediction_lgr,
+                                    pass_args = TRUE)
+updater <- updater + CommandHandler("lda", prediction_lda,
+                                    pass_args = TRUE)
+updater <- updater + CommandHandler("qda", prediction_qda,
+                                    pass_args = TRUE)
+updater <- updater + CommandHandler("knn", prediction_knn,
+                                    pass_args = TRUE)
+updater <- updater + CommandHandler("nb", prediction_nb,
+                                    pass_args = TRUE)
+updater <- updater + CommandHandler("tree", prediction_tree,
+                                    pass_args = TRUE)
+updater <- updater + CommandHandler("svm", prediction_svm,
+                                    pass_args = TRUE)
+updater <- updater + CommandHandler("rf", prediction_rf,
+                                    pass_args = TRUE)
+updater <- updater + MessageHandler(unknown, MessageFilters$command)
+
+#Error Handler
+error_handler <- function(bot, update, error = NULL) {
+  if (!is.null(error)) {
+    cat("An error occurred:", error$message, "\n")
+  } else {
+    cat("An error occurred, but no details are available.\n")
+  }
+}
+
+# Register the error handler
+updater <- updater + ErrorHandler(error_handler)
+
+# Start the bot
+updater$start_polling()
+```
+

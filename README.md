@@ -4,18 +4,25 @@ diagnostic tools, machine learning has emerged as a promising route. For these r
 data set that has real implications when applying the techniques learned throughout this course. In this project, we
 are looking to use the methods listed below to train a model to accurately classify whether a breast cancer tumor
 will be malignant or benign. The following models will be trained using the data:
- - Logistic Regression
- – Linear Discriminant Analysis (LDA)
- – Quadratic Discriminant Analysis (QDA)
- – Bagging (special case of Random Forest)
- – Random Forest
- – K-Nearest Neighbor (KNN)
- – Naive Bayes
- – Decision Tress
- – Support Vector Machine (SVM)
-   – Linear Kernel
-   – Polynomial kernel
-   – Radial kernel
+\begin{itemize}
+\renewcommand\labelitemi{--}
+\setlength\itemsep{0.01em}
+    \item Logistic Regression
+    \item Linear Discriminant Analysis (LDA)
+    \item Quadratic Discriminant Analysis (QDA)
+    \item Bagging (special case of Random Forest)
+    \item Random Forest
+    \item K-Nearest Neighbor (KNN)
+    \item Naive Bayes
+    \item Decision Tress
+    \item Support Vector Machine (SVM)
+    \begin{itemize}
+        \item Linear Kernel
+        \item Polynomial kernel
+        \item Radial kernel 
+    \end{itemize}
+
+\end{itemize}
 The best model will be selected based on the accuracy with which it was able to classify the tumors. We will also
 use cross validation as our way to validate the accuracy of the model rather than splitting the data into a test and
 train set. This will also help fine tune the model which is important when there are many predictors and when
